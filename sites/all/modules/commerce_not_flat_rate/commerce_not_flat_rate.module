@@ -1,0 +1,436 @@
+<?php
+
+/**
+ * @file
+ * commerce_not_flat_rate.module
+ */
+
+/**
+ * Implements hook_help().
+ */
+function commerce_not_flat_rate_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#commerce_not_flat_rate':
+      $readme = dirname(__FILE__) . '/README.md';
+      $output = FALSE;
+
+      if (file_exists($readme)) {
+        $contents = file_get_contents($readme);
+        $output = '<pre>' . $contents . '</pre>';
+
+        if (module_exists('markdown')) {
+          $info = module_invoke('markdown', 'filter_info');
+          $markdown = $info['filter_markdown'];
+
+          if (function_exists($markdown['process callback'])) {
+            $output = $markdown['process callback']($contents, NULL);
+          }
+        }
+      }
+
+      return $output;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_not_flat_rate_menu() {
+  $items = array();
+
+  $items['admin/commerce/config/shipping/methods/commerce-not-flat-rate/edit'] = array(
+    'title' => 'Edit',
+    'description' => 'Edit not flat rate.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_not_flat_rate_form'),
+    'access arguments' => array('administer shipping'),
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+  );
+
+  $items['admin/commerce/config/shipping/methods/commerce-not-flat-rate/edit/%'] = array(
+    'title' => 'Edit rate',
+    'description' => 'Edit not flat rate rates.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_not_flat_rate_form_rate', 7),
+    'access arguments' => array('administer shipping'),
+  );
+
+  return $items;
+}
+
+/**
+ * Form constructor: commerce_not_flat_rate_form().
+ *
+ * @see commerce_not_flat_rate_form_submit()
+ */
+function commerce_not_flat_rate_form($form, &$form_state) {
+  $form = array();
+  $instance = field_info_instance('commerce_customer_profile', 'commerce_customer_address', 'shipping');
+
+  if ($instance['widget']['settings']['available_countries']) {
+    if (commerce_shipping_services('flat_rate')) {
+      $form['commerce_not_flat_rate']['#tree'] = TRUE;
+
+      $not_flat_rate_get = variable_get('commerce_not_flat_rate', array());
+      $countries = _addressfield_country_options_list();
+
+      foreach (commerce_shipping_services('flat_rate') as $shipping_service) {
+        $form['commerce_not_flat_rate'][$shipping_service['name']] = array(
+          '#type' => 'fieldset',
+          '#title' => $shipping_service['title'],
+          '#collapsible' => TRUE,
+        );
+
+        $weights = array();
+        if (isset($not_flat_rate_get[$shipping_service['name']]['weights'])) {
+          $weights = $not_flat_rate_get[$shipping_service['name']]['weights'];
+        }
+
+        $form['commerce_not_flat_rate'][$shipping_service['name']]['weights'] = array(
+          '#type' => 'textfield',
+          '#title' => t('Weight'),
+          '#description' => t('E.g. 5 or separate with comma if more than one e.g. 5,10,15 etc.'),
+          '#default_value' => implode(',', $weights),
+          '#size' => NULL,
+        );
+
+        $units = '';
+        if (isset($not_flat_rate_get[$shipping_service['name']]['units'])) {
+          $units = $not_flat_rate_get[$shipping_service['name']]['units'];
+        }
+
+        $form['commerce_not_flat_rate'][$shipping_service['name']]['units'] = array(
+          '#type' => 'select',
+          '#title' => t('Unit'),
+          '#options' => physical_weight_unit_options(FALSE),
+          '#default_value' => $units,
+          '#empty_value' => '',
+        );
+
+        if ($units) {
+          foreach ($instance['widget']['settings']['available_countries'] as $cid) {
+            $form['commerce_not_flat_rate'][$shipping_service['name']]['rates'][$cid] = array(
+              '#type' => 'fieldset',
+              '#title' => $countries[$cid],
+              '#collapsible' => TRUE,
+              '#collapsed' => TRUE,
+            );
+
+            $cols_label = array();
+            if ($weights) {
+              foreach ($weights as $wid => $weight) {
+                $cols_label[] = ($wid ? $weights[$wid - 1] : '0') . '~' . $weight . $units;
+              }
+            }
+            $cols_label[] = '+';
+
+            $rows_label = array();
+            $rows_label['default'] = t('Dafault');
+
+            $data = variable_get('commerce_not_flat_rate_' . $shipping_service['name'] . '_' . $cid, array());
+
+            $rows = array();
+            foreach ($rows_label as $rlid => $row_label) {
+              $row = array($row_label);
+              foreach ($cols_label as $clid => $col_label) {
+                $amount = isset($data['rate'][$rlid . ' ' . $clid]) ? $data['rate'][$rlid . ' ' . $clid] : '';
+                $row[] = commerce_currency_format($amount, $shipping_service['base_rate']['currency_code']);
+              }
+              $row[] = isset($data['etd'][$rlid]) ? $data['etd'][$rlid] : '';
+              $row[] = t('<a href="@url">Edit</a>', array('@url' => url('admin/commerce/config/shipping/methods/commerce-not-flat-rate/edit/' . $shipping_service['name'] . '-' . $cid)));
+              $rows[$rlid] = $row;
+            }
+
+            $cols_label[] = t('ETD');
+            $cols_label[] = t('Operation');
+
+            $form['commerce_not_flat_rate'][$shipping_service['name']]['rates'][$cid]['rate'] = array(
+              '#theme' => 'table',
+              '#header' => array_merge(array(t('Country \ weight')), $cols_label),
+              '#rows' => $rows,
+            );
+          }
+        }
+      }
+
+      $form['#submit'][] = 'commerce_not_flat_rate_form_submit';
+    }
+    else {
+      drupal_set_message(t('Please add <a href="@url">shipping service</a> first.', array('@url' => url('admin/commerce/config/shipping/services/flat-rate/add', array('query' => drupal_get_destination())))), 'warning');
+    }
+  }
+  else {
+    drupal_set_message(t('Please set <a href="@url">available countries</a> first.', array('@url' => url('admin/commerce/customer-profiles/types/shipping/fields/commerce_customer_address', array('query' => drupal_get_destination())))), 'warning');
+  }
+
+  return $form ? system_settings_form($form) : FALSE;
+}
+
+/**
+ * Form submission handler: commerce_not_flat_rate_form_submit().
+ *
+ * @see commerce_not_flat_rate_form()
+ */
+function commerce_not_flat_rate_form_submit($form, &$form_state) {
+  foreach (commerce_shipping_services('flat_rate') as $shipping_service) {
+    if (isset($form_state['values']['commerce_not_flat_rate'][$shipping_service['name']]['weights'])) {
+      $weights = $form_state['values']['commerce_not_flat_rate'][$shipping_service['name']]['weights'];
+      $weights = $weights ? array_filter(array_map('trim', explode(',', $weights))) : array();
+
+      if (count($weights) > 1) {
+        sort($weights);
+      }
+
+      $form_state['values']['commerce_not_flat_rate'][$shipping_service['name']]['weights'] = $weights;
+    }
+  }
+}
+
+/**
+ * Form constructor: commerce_not_flat_rate_form_rate().
+ */
+function commerce_not_flat_rate_form_rate($form, &$form_state) {
+  $form = array();
+  $args = explode('-', $form_state['build_info']['args'][0]);
+  $not_flat_rate_get = variable_get('commerce_not_flat_rate', array());
+  $instance = field_info_instance('commerce_customer_profile', 'commerce_customer_address', 'shipping');
+
+  if (in_array($args[0], array_keys($not_flat_rate_get)) && array_key_exists($args[1], $instance['widget']['settings']['available_countries'])) {
+    if (count($args) === 2) {
+      $weights = $not_flat_rate_get[$args[0]]['weights'];
+      $units = $not_flat_rate_get[$args[0]]['units'];
+
+      $cols_label = array();
+      if ($weights) {
+        foreach ($weights as $wid => $weight) {
+          $cols_label[] = ($wid ? $weights[$wid - 1] : '0') . '~' . $weight . $units;
+        }
+      }
+      $cols_label[] = '+';
+
+      $countries = _addressfield_country_options_list();
+
+      $form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]] = array(
+        '#tree' => TRUE,
+        '#theme' => 'table',
+        '#header' => array_merge(array(t('@country \ weight', array('@country' => $countries[$args[1]]))), $cols_label),
+      );
+
+      $rows_label = array();
+      if (commerce_not_flat_rate_get_administrative_areas($args[1])) {
+        $form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['#header'] = array_merge(array(t('Province (@country) \ weight', array('@country' => $countries[$args[1]]))), $cols_label);
+
+        foreach (commerce_not_flat_rate_get_administrative_areas($args[1]) as $aaid => $administrative_area) {
+          $rows_label[$aaid] = $administrative_area;
+        }
+      }
+      $rows_label['default'] = t('Default');
+
+      $data = variable_get('commerce_not_flat_rate_' . $args[0] . '_' . $args[1], array());
+      $shipping_service = commerce_shipping_service_load($args[0]);
+
+      $rows = array();
+      foreach ($rows_label as $rlid => $row_label) {
+        $row = array($row_label);
+        foreach ($cols_label as $clid => $col_label) {
+          $amount = isset($data['rate'][$rlid . ' ' . $clid]) ? $data['rate'][$rlid . ' ' . $clid] : '';
+
+          $form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['rate'][$rlid . ' ' . $clid] = array(
+            '#type' => 'textfield',
+            '#default_value' => commerce_currency_amount_to_decimal($amount, $shipping_service['base_rate']['currency_code']),
+            '#size' => NULL,
+          );
+
+          $row[] = array('data' => &$form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['rate'][$rlid . ' ' . $clid]);
+        }
+
+        $form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['etd'][$rlid] = array(
+          '#type' => 'textfield',
+          '#default_value' => isset($data['etd'][$rlid]) ? $data['etd'][$rlid] : '',
+          '#size' => NULL,
+        );
+
+        $row[] = array('data' => &$form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['etd'][$rlid]);
+
+        $rows[$rlid] = $row;
+      }
+
+      $form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['#header'][] = t('ETD');
+      $form['data']['commerce_not_flat_rate_' . $args[0] . '_' . $args[1]]['#rows'] = $rows;
+    }
+  }
+
+  return $form ? system_settings_form($form) : FALSE;
+}
+
+/**
+ * Implements hook_commerce_shipping_method_info().
+ */
+function commerce_not_flat_rate_commerce_shipping_method_info() {
+  $shipping_methods = array();
+
+  $shipping_methods['commerce_not_flat_rate'] = array(
+    'title' => t('Not flat rate'),
+    'description' => t('Method for not flat rate.'),
+  );
+
+  return $shipping_methods;
+}
+
+/**
+ * Implements hook_commerce_shipping_service_info_alter().
+ */
+function commerce_not_flat_rate_commerce_shipping_service_info_alter(&$shipping_services) {
+  foreach ($shipping_services as $shipping_service) {
+    if ($shipping_service['shipping_method'] === 'flat_rate') {
+      $shipping_services[$shipping_service['name']]['callbacks']['rate'] = 'commerce_not_flat_rate_service_rate_order';
+      $shipping_services[$shipping_service['name']]['callbacks']['details_form'] = 'commerce_not_flat_rate_service_details_form';
+    }
+  }
+}
+
+/**
+ * Shipping service callback: rate.
+ *
+ * @see commerce_shipping_service_rate_order()
+ */
+function commerce_not_flat_rate_service_rate_order($shipping_service, $order) {
+  $field_name = commerce_physical_order_shipping_field_name($order);
+  $instance = field_info_instance('commerce_customer_profile', 'commerce_customer_address', 'shipping');
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  $shipping_address = commerce_not_flat_rate_get_shipping_address($field_name, $instance, $order_wrapper);
+
+  $data = variable_get('commerce_not_flat_rate_' . $shipping_service['name'] . '_' . $shipping_address['country'], array());
+
+  $i = commerce_not_flat_rate_get_i($shipping_service, $order);
+
+  $amount = '';
+  if (isset($data['rate']['default ' . $i]) && $data['rate']['default ' . $i]) {
+    $amount = $data['rate']['default ' . $i];
+  }
+  if (isset($data['rate'][$shipping_address['administrative_area'] . ' ' . $i]) && $data['rate'][$shipping_address['administrative_area'] . ' ' . $i]) {
+    $amount = $data['rate'][$shipping_address['administrative_area'] . ' ' . $i];
+  }
+
+  $rate = $shipping_service['base_rate'];
+
+  if ($rate['amount'] && $i) {
+    $rate['amount'] += ($rate['amount'] * $i);
+  }
+  if ($amount) {
+    $rate['amount'] += $amount;
+  }
+
+  return $rate;
+}
+
+/**
+ * Shipping service callback: details form.
+ *
+ * @see commerce_shipping_service_callback()
+ */
+function commerce_not_flat_rate_service_details_form($pane_form, $pane_values, $checkout_pane, $order, $shipping_service) {
+  $field_name = commerce_physical_order_shipping_field_name($order);
+  $instance = field_info_instance('commerce_customer_profile', 'commerce_customer_address', 'shipping');
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  $shipping_address = commerce_not_flat_rate_get_shipping_address($field_name, $instance, $order_wrapper);
+
+  $data = variable_get('commerce_not_flat_rate_' . $shipping_service['name'] . '_' . $shipping_address['country'], array());
+
+  $i = commerce_not_flat_rate_get_i($shipping_service, $order);
+
+  $markup = '';
+  if (isset($data['etd']['default']) && $data['etd']['default']) {
+    $markup = $data['etd']['default'];
+  }
+  if (isset($data['rate'][$shipping_address['administrative_area'] . ' ' . $i]) && $data['rate'][$shipping_address['administrative_area'] . ' ' . $i] && isset($data['etd'][$shipping_address['administrative_area']])) {
+    $markup = $data['etd'][$shipping_address['administrative_area']];
+  }
+
+  $form = array();
+
+  if ($markup) {
+    $pane_values['service_details'] += array('name' => 'ETD');
+
+    $form['name']['#markup'] = t('ETD: @markup', array('@markup' => $markup));
+  }
+
+  return $form ? $form : FALSE;
+}
+
+/**
+ * Get list of administrative_area.
+ *
+ * @param string $cid
+ *   Country code.
+ *
+ * @return array
+ *   Administrative areas to given country
+ *
+ * @see module_load_include()
+ * @see addressfield_get_administrative_areas()
+ */
+function commerce_not_flat_rate_get_administrative_areas($cid) {
+  module_load_include('inc', 'addressfield', 'addressfield.administrative_areas');
+
+  return addressfield_get_administrative_areas($cid);
+}
+
+/**
+ * Constructor for shipping_address.
+ *
+ * @param string $field_name
+ *   Shipping field name.
+ * @param array $instance
+ *   Shipping field info instance.
+ * @param EntityMetadataWrapper $order_wrapper
+ *   Shipping entity metadata.
+ *
+ * @return array
+ *   Shipping address
+ *
+ * @see addressfield_default_values()
+ */
+function commerce_not_flat_rate_get_shipping_address($field_name, array $instance, EntityMetadataWrapper $order_wrapper) {
+  $shipping_address = addressfield_default_values($field_name, $instance);
+  if ($order_wrapper->{$field_name}->commerce_customer_address) {
+    $shipping_address = $order_wrapper->{$field_name}->commerce_customer_address->value();
+  }
+
+  return $shipping_address;
+}
+
+/**
+ * Constructor for part of rate array key.
+ *
+ * @param array $shipping_service
+ *   Shipping field name.
+ * @param object $order
+ *   Shipping order object.
+ *
+ * @return string
+ *   Part of rate array key
+ *
+ * @see commerce_not_flat_rate_service_rate_order()
+ * @see commerce_not_flat_rate_service_details_form()
+ */
+function commerce_not_flat_rate_get_i(array $shipping_service, stdClass $order) {
+  $not_flat_rate_get = variable_get('commerce_not_flat_rate', array());
+  $i = 0;
+
+  if (isset($not_flat_rate_get[$shipping_service['name']]['weights']) && isset($not_flat_rate_get[$shipping_service['name']]['units']) && $not_flat_rate_get[$shipping_service['name']]['units']) {
+    $order_weight = commerce_physical_order_weight($order, $not_flat_rate_get[$shipping_service['name']]['units']);
+
+    foreach ($not_flat_rate_get[$shipping_service['name']]['weights'] as $weight) {
+      if ($order_weight['weight'] <= $weight) {
+        break;
+      }
+      $i++;
+    }
+  }
+
+  return $i;
+}

@@ -1,0 +1,16 @@
+name = Not flat rate
+description = Allows you to define any number of address and weight based shipping services for customers to choose during checkout.
+package = Commerce (shipping)
+dependencies[] = addressfield
+dependencies[] = commerce_flat_rate
+dependencies[] = commerce_physical
+dependencies[] = commerce_shipping
+configure = admin/commerce/config/shipping/methods/commerce-not-flat-rate/edit
+core = 7.x
+
+; Information added by Drupal.org packaging script on 2017-08-21
+version = "7.x-1.0-alpha1"
+core = "7.x"
+project = "commerce_not_flat_rate"
+datestamp = "1503294246"
+

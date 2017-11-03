@@ -1,0 +1,23 @@
+<?php
+
+/**
+ * @file
+ * commerce_not_flat_rate.install
+ */
+
+/**
+ * Implements hook_uninstall().
+ */
+function commerce_not_flat_rate_uninstall() {
+  $prefix = 'commerce_not_flat_rate';
+  $select = db_select('variable', 'v');
+
+  $select->condition('name', db_like($prefix) . '%', 'LIKE');
+  $select->fields('v', array('name'));
+
+  $items = $select->execute();
+
+  foreach ($items as $item) {
+    variable_del($item->name);
+  }
+}
